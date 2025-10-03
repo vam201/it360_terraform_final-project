@@ -1,0 +1,46 @@
+---
+- name: Install and configure Apache on Ubuntu
+  hosts: web
+  become: yes
+  gather_facts: yes
+
+  pre_tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+  tasks:
+    - name: Install Apache
+      apt:
+        name: apache2
+        state: present
+
+    - name: Enable and start Apache
+      service:
+        name: apache2
+        state: started
+        enabled: yes
+
+    - name: Deploy a simple index.html
+      copy:
+        dest: /var/www/html/index.html
+        owner: www-data
+        group: www-data
+        mode: '0644'
+        content: |
+          <!doctype html>
+          <html>
+          <head><meta charset="utf-8"><title>IT360 – Apache</title></head>
+          <body style="font-family: system-ui; margin: 2rem;">
+            <h1>✅ Apache is running on AWS EC2</h1>
+            <p>Provisioned with Terraform, configured with Ansible (WSL + VS Code).</p>
+          </body>
+          </html>
+      notify: restart apache
+
+  handlers:
+    - name: restart apache
+      service:
+        name: apache2
+        state: restarted
