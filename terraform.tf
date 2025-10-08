@@ -12,7 +12,11 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 3.0.2"
     }
+    local  = { 
+      source = "hashicorp/local"  
+      version = "~> 2.4" 
+    }
   }
 
-  required_version = ">= 1.2"
+  required_version = ">= 1.3.0"
 }

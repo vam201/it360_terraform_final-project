@@ -1,0 +1,103 @@
+---
+- name: Install Apache and deploy site from GitHub
+  hosts: web
+  become: yes
+  gather_facts: yes
+
+  vars:
+    repo_url: "https://github.com/joshdeason311/IT360Final.git"
+    repo_version: "main"              # change to "master" if needed
+    webroot: "/var/www/it360"
+    vhost_name: "it360"
+
+  pre_tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+  tasks:
+    - name: Ensure packages are present (Apache + Git)
+      apt:
+        name:
+          - apache2
+          - git
+        state: present
+
+    # NOTE: create the directory as root so the 'git' task (which runs as root)
+    #       doesn't hit the safe.directory check
+    - name: Create site directory (root-owned for cloning)
+      file:
+        path: "{{ webroot }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Deploy website from GitHub (clone/pull as root)
+      git:
+        repo: "{{ repo_url }}"
+        dest: "{{ webroot }}"
+        version: "{{ repo_version }}"
+        force: yes
+        update: yes
+      notify: restart apache
+
+    # After cloning, make Apache the owner of the content
+    - name: Ensure proper ownership on content (www-data)
+      file:
+        path: "{{ webroot }}"
+        state: directory
+        recurse: yes
+        owner: www-data
+        group: www-data
+
+    - name: Write Apache vhost for {{ vhost_name }}
+      copy:
+        dest: "/etc/apache2/sites-available/{{ vhost_name }}.conf"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          <VirtualHost *:80>
+              ServerName _
+              DocumentRoot {{ webroot }}
+              <Directory {{ webroot }}>
+                  Options Indexes FollowSymLinks
+                  AllowOverride All
+                  Require all granted
+              </Directory>
+              ErrorLog ${APACHE_LOG_DIR}/{{ vhost_name}}_error.log
+              CustomLog ${APACHE_LOG_DIR}/{{ vhost_name}}_access.log combined
+          </VirtualHost>
+      notify: reload apache
+
+    - name: Disable default site (000-default)
+      file:
+        path: /etc/apache2/sites-enabled/000-default.conf
+        state: absent
+      notify: reload apache
+
+    - name: Enable {{ vhost_name }} site
+      file:
+        src: "/etc/apache2/sites-available/{{ vhost_name }}.conf"
+        dest: "/etc/apache2/sites-enabled/{{ vhost_name }}.conf"
+        state: link
+      notify: reload apache
+
+    - name: Ensure Apache is enabled and running
+      service:
+        name: apache2
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: reload apache
+      service:
+        name: apache2
+        state: reloaded
+
+    - name: restart apache
+      service:
+        name: apache2
+        state: restarted
