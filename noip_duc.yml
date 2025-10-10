@@ -1,172 +1,62 @@
 ---
-- name: Install No-IP DUC and 30s failover
+- name: Update No-IP hostname with this host's public IP
   hosts: web
-  become: true
-  gather_facts: true
+  gather_facts: no
+  become: no
+
+  # Inventory must define (in [all:vars]):
+  #   noip_username=...
+  #   noip_password=...
+  #   noip_hostname=it360fall20253ergroup.no-ip.org
 
   vars:
-    # No-IP creds (move to Vault later)
-    noip_username: "m83j4sy@ddnskey.com"
-    noip_password: "HLJvYpHLcQxs"
-    noip_group: "all.ddnskey.com"
+    http_agent: "ansible-noip/2.0"
 
-    # The No-IP hostname that should move between nodes
-    noip_hostname: "it360fall20253ergroup.no-ip.org"
-
-    # Paths and timings
-    noip_tmp_dir: /tmp/noip-duc
-    noip_tarball: "{{ noip_tmp_dir }}/noip-duc-latest.tar.gz"
-    noip_env_file: /etc/noip-duc.env
-    noip_bin: /usr/bin/noip-duc
-    check_every_sec: 30
-    fail_threshold: 3  # promote after N failed health checks
+  pre_tasks:
+    - name: Check required No-IP vars
+      assert:
+        that:
+          - noip_username is defined
+          - noip_password is defined
+          - noip_hostname is defined
+        fail_msg: "Set noip_username, noip_password, and noip_hostname in inventory.ini [all:vars]."
 
   tasks:
-    - name: Ensure prerequisites (curl/dig included)
-      apt:
-        name:
-          - ca-certificates
-          - wget
-          - tar
-          - apt-transport-https
-          - curl
-          - dnsutils
-        state: present
-        update_cache: yes
+    - block:
+        - name: Get public IP (ipify)
+          uri:
+            url: https://api.ipify.org
+            return_content: yes
+            status_code: 200
+          register: ipify
 
-    - name: Create temp dir
-      file:
-        path: "{{ noip_tmp_dir }}"
-        state: directory
-        mode: "0755"
+        - name: Set public_ip
+          set_fact:
+            public_ip: "{{ ipify.content | trim }}"
+      rescue:
+        - name: Get public IP (fallback ifconfig.me)
+          uri:
+            url: https://ifconfig.me/ip
+            return_content: yes
+            status_code: 200
+          register: ifcfg
 
-    - name: Download latest No-IP DUC (Linux)
-      get_url:
-        url: "https://www.noip.com/download/linux/latest"
-        dest: "{{ noip_tarball }}"
-        mode: "0644"
-        force: yes
+        - name: Set public_ip (fallback)
+          set_fact:
+            public_ip: "{{ ifcfg.content | trim }}"
 
-    - name: Unarchive DUC bundle
-      unarchive:
-        src: "{{ noip_tarball }}"
-        dest: "{{ noip_tmp_dir }}"
-        remote_src: yes
+    - name: Update No-IP hostname to this host's public IP
+      uri:
+        url: "https://dynupdate.no-ip.com/nic/update?hostname={{ noip_hostname | urlencode }}&myip={{ public_ip | urlencode }}"
+        method: GET
+        force_basic_auth: yes
+        url_username: "{{ noip_username }}"
+        url_password: "{{ noip_password }}"
+        http_agent: "{{ http_agent }}"
+        return_content: yes
+        status_code: 200
+      register: noip_update
 
-    - name: Find the .deb
-      find:
-        paths: "{{ noip_tmp_dir }}"
-        patterns: "noip-duc_*_amd64.deb"
-        recurse: yes
-      register: debs
-
-    - name: Install DUC
-      apt:
-        deb: "{{ debs.files[0].path }}"
-      when: debs.matched | int > 0
-
-    - name: Write credentials env file (root only)
-      no_log: true
-      copy:
-        dest: "{{ noip_env_file }}"
-        owner: root
-        group: root
-        mode: "0600"
-        content: |
-          NOIP_USERNAME={{ noip_username }}
-          NOIP_PASSWORD={{ noip_password }}
-          NOIP_GROUP={{ noip_group }}
-
-    - name: Install failover script
-      copy:
-        dest: /usr/local/bin/noip-failover.sh
-        mode: "0755"
-        owner: root
-        group: root
-        content: |
-          #!/usr/bin/env bash
-          set -euo pipefail
-
-          HOSTNAME="{{ noip_hostname }}"
-          USER="{{ noip_username }}"
-          PASS="{{ noip_password }}"
-          GROUP="{{ noip_group }}"
-          PEER="{{ hostvars[inventory_hostname].peer_ip }}"
-          FAIL_N={{ fail_threshold }}
-
-          # Health-check: use the peer's IP directly (avoid DNS loops)
-          CHECK_URL="http://${PEER}/"
-
-          myip()  { curl -fsS https://api.ipify.org || curl -fsS https://ifconfig.me; }
-          curr()  { dig +short "${HOSTNAME}" @1.1.1.1 | tail -n1; }
-          is_peer_up() { curl -fsS --max-time 3 "${CHECK_URL}" >/dev/null 2>&1; }
-
-          ROLE="{{ hostvars[inventory_hostname].role }}"
-          if [[ "${ROLE}" == "primary" ]]; then
-            # Primary just enforces its IP each run
-            /usr/bin/noip-duc -g "${GROUP}" --username "${USER}" --password "${PASS}" >/dev/null 2>&1 || true
-            exit 0
-          fi
-
-          # Secondary: promote if peer down for FAIL_N checks and DNS != my IP
-          for i in $(seq 1 "${FAIL_N}"); do
-            is_peer_up && exit 0
-            sleep 1
-          done
-
-          MYIP="$(myip || true)"
-          CURR="$(curr || true)"
-          if [[ -n "${MYIP}" && "${CURR}" != "${MYIP}" ]]; then
-            /usr/bin/noip-duc -g "${GROUP}" --username "${USER}" --password "${PASS}" >/dev/null 2>&1 || true
-          fi
-
-    - name: Oneshoot service for failover check/update
-      copy:
-        dest: /etc/systemd/system/noip-failover.service
-        mode: "0644"
-        content: |
-          [Unit]
-          Description=No-IP failover oneshot (check/promote if needed)
-          After=network-online.target
-          Wants=network-online.target
-
-          [Service]
-          Type=oneshot
-          EnvironmentFile={{ noip_env_file }}
-          ExecStart=/usr/local/bin/noip-failover.sh
-
-    - name: Timer to run the oneshot every {{ check_every_sec }}s
-      copy:
-        dest: /etc/systemd/system/noip-failover.timer
-        mode: "0644"
-        content: |
-          [Unit]
-          Description=Run noip-failover every {{ check_every_sec }} seconds
-
-          [Timer]
-          OnBootSec=5s
-          OnUnitActiveSec={{ check_every_sec }}s
-          AccuracySec=1s
-          Persistent=true
-
-          [Install]
-          WantedBy=timers.target
-      notify: reload systemd
-
-    - name: Stop old noip-duc loop service if it exists
-      systemd:
-        name: noip-duc.service
-        enabled: false
-        state: stopped
-      ignore_errors: true
-
-    - name: Enable and start timer
-      systemd:
-        name: noip-failover.timer
-        enabled: true
-        state: started
-
-  handlers:
-    - name: reload systemd
-      systemd:
-        daemon_reload: yes
+    - name: Show No-IP response (expect 'good <ip>' or 'nochg <ip>')
+      debug:
+        msg: "{{ inventory_hostname }} => {{ noip_update.content | trim }}"

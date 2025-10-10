@@ -1,0 +1,25 @@
+Files:
+
+terraform.tf = providers data
+main.tf = variables, providers, resources, vms, security groups or firewalls, key, created or modify file inventory.ini file
+deploy_site.yml = install apache and copy web codes from GitHub
+noip_duc.yml = Install the noip.org agent to update the DNS services on both servers and configure to update every 30 seconds with a failover plan
+
+Commands:
+From PS:
+terraform init = start the terraform service.
+terraform plan = show what will be created or modified.
+terraform apply -auto-approve = This apply the changes and start the creation of resources on the providers. The -auto-approve part bypass the question yes or no to runn this command.
+
+From WSL:
+ansible -i ./inventory.ini web -m ping -vv = Test the ansible connection
+ansible-playbook -i ./inventory.ini deploy_site.yml -vv = Install the Apache server and update the web code from GitHub
+ansible-playbook -i ./inventory.ini noip_duc.yml -vv = Install noip_duc agent and update IP every 30 seconds.
+
+From PS:
+terraform destroy -auto-approve = Destroy all the resources created.
+
+
+
+ssh-keygen -R 34.31.38.14
+ssh-keygen -R "[34.31.38.14]:22"

@@ -14,7 +14,7 @@ variable "ssh_pubkey" {
 
 variable "ansible_private_key_path" {
   type    = string
-  default = "/mnt/c/Users/Vinicio Morillo/Downloads/IT 360-01 (B5) Cloud Integration/Final_Project/id_ed25519"
+  default = "~/.ssh/id_ed25519"
 }
 
 # --- AWS ---
@@ -64,7 +64,7 @@ provider "google" {
   credentials = file("${path.module}/erudite-store-471004-j5-875e9c26ef35.json")
 }
 
-############################
+############################ Resources ############################
 # AWS
 ############################
 data "aws_vpc" "default" {
@@ -188,7 +188,7 @@ locals {
 
   host_lines = compact([
     local.aws_ip != null ? "${local.aws_ip} ansible_user=${var.ssh_username} ansible_ssh_private_key_file=${var.ansible_private_key_path}" : null,
-    "${local.gcp_ip} ansible_user=${var.ssh_username} ansible_ssh_private_key_file= #${var.ansible_private_key_path}"
+    "${local.gcp_ip} ansible_user=${var.ssh_username} ansible_ssh_private_key_file=${var.ansible_private_key_path}"
   ])
 }
 
@@ -200,6 +200,12 @@ resource "local_file" "ansible_inventory" {
 
   [all:vars]
   ansible_python_interpreter=/usr/bin/python3
+  ansible_user=ubuntu
+  ansible_ssh_private_key_file=~/.ssh/id_ed25519
+  #ansible_ssh_private_key_file=/mnt/c/Users/Vinicio Morillo/Downloads/IT 360-01 (B5) Cloud Integration/Final_Project/id_ed25519
+  noip_username=m83j4sy@ddnskey.com
+  noip_password=HLJvYpHLcQxs
+  noip_hostname=it360fall20253ergroup.no-ip.org
   EOT
 
   depends_on = [
